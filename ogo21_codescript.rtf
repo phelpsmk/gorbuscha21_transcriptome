@@ -1,0 +1,222 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww20300\viewh18120\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 Gorbuscha21_transcriptome\
+\
+#script detailing how data was extracted, analyzed, and organized.\
+#the story to this code begin upon download of paired-end sequence reads from an Illumina system to the WSU computational network, Kamiak cluster. Access is through the terminal , so we will begin using linux functions. Note, this txt file , while keeping all the script, may require minor reformatting to account for changes in organization.\
+\
+#1. Generate Reference Genome/Transcriptome - downloaded full genbank (genomic.fna and genomic.gtf) files from ncbi (https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_021184085.1/)\
+#Salmon alignment requires an indexed reference and there are two ways to do this either using just the transcriptome or alternatively you can create a decoy-aware index. \
+#Also double check the naming of .fna and .gtf to match script.\
+grep "^>" <(gunzip -c ogo.genome.fna.gz) | cut -d " " -f 1 > decoys.txt\
+#This will produce the decoys.txt file which has the decoy names\
+sed -i.bak -e 's/>//g' decoys.txt\
+#Next concatenate the genome to the end of the transcriptome\
+cat ogo.transcriptome.fna.gz ogo.genome.fna.gz > gentrome.fa.gz\
+#Now we can run the salmon indexing\
+module load salmon/1.8.0\
+salmon index -t gentrome.fa.gz -d decoys.txt -p 12 -i salmon_index --gencode -k 31\
+\
+#2. Filtering Raw Reads - Trim Galore\
+#this will entail processing each read one at a time, so steps were made to expedite this by subdividing samples.\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 #Read filtering is important for removing adaptors and low quality reads\
+#Trim galore is great as it autodetects adaptors and the default settings should be good enough for most applications\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 module load trimgalore/0.6.6 #we are assuming paired-end reads\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 trim_galore --paired sample1_1.fq sample1_2.fq --output_dir sample1 #This will write files named sample1_1_trimmed.fq and sample1_2_trimmed.fq into aa directory named sample1\
+#To run all my samples, I subdivided them into groups of 5-15 and then wrote .sh scripts that the computational cluster would use to run my project. Parameters as follow:\
+#use batch script header:\
+			#!/bin/bash\
+			#SBATCH --partition=cahnrs\
+			#SBATCH --account=phelps\
+			#SBATCH --job-name=trimFM\
+			#SBATCH --output=%x_%j.out\
+			#SBATCH --error=%x_%j.err\
+			#SBATCH --mail-type=ALL\
+			#SBATCH --mail-user=max.butensky@wsu.edu\
+			#SBATCH --time=20:00:00\
+			#SBATCH --nodes=1\
+			#SBATCH --ntasks=1\
+			#SBATCH --ntasks-per-node=1\
+			#SBATCH --cpus-per-task=1\
+			#SBATCH --mem=6GB\
+\
+			module load trimgalore/0.6.6\
+			trim_galore --paired A1_1.fq.gz A1_2.fq.gz --output_dir sampleA1\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 \
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 #sample A1 ran for 45 min\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 #Key function here => trim_galore --paired sample1_1.fq sample1_2.fq --output_dir sample1\
+#This will write to files named sample1_1_trimmed.fq and sample1_2_trimmed.fq into aa diretory named sample1\
+sbatch trim_.sbrun #this submits the .sh script (called trim_.sbrun) to Kamiak cluster\
+#Use the \'91nano\'92 function to build .sh (saved as .sbrun) on terminal interface \
+\
+\
+#3. Quantifying Reads - Combining salmon index with trimmed reads to generate sequences / gene\
+#We are quantifying reads with Salmon quant\
+module load salmon/1.8.0\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 salmon quant -i salmon_index -l IU -1 sample1_1_trimmed.fq -2 sample1_2_trimmed.fq --validateMappings -o transcripts_quant #this is the skeleton function to quant each sample\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 #This will produce a folder named transcripts_quant which has your file called quant.sf which is the quantification file\
+#Note that the -l parameter will change depending on your library sequencing approach but if you are using paired-end leave it as is\
+#Sometimes salmon produces weird errors, if that is the case then remove the --validateMappings and sometimes that fixes it\
+#Salmon also produces other help full folders like a log folder\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 salmon quant -i /data/lab/phelps/Max_O_gorb_reads/salmon_index -l IU -1 ./sampleR1/R1_1_val_1.fq.gz -2 ./sampleR1/R1_2_val_2.fq.gz --validateMappings -o script_quant_R1 #this is my modified code showing adjustments for location of files\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 \
+\
+#4. Transfer to Local Machine - we will do the next portion in Rstudio\
+scp -r your.name@kamiak.wsu.edu:~/myFile ./Downloads. #download from kamiak, need to be logged out of ssh\
+#This may take time to retrieve all of your output files\
+\
+#5. TXimport - compiling all quant files into a count matrix (https://bioconductor.org/packages/release/bioc/html/tximport.html)\
+BiocManager::install("tximport")\
+library(tximport)\
+#browseVignettes("tximport")\
+#First we must generate a tx2gene.csv file [Transcript ID ; gene ID] , by isolating these details from the .gff genome file\
+#Do these functions in the terminal\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 grep -c ID=rna*.* GCFOgo.gff #pull RNA line\
+grep -o ID=rna*.* GCFOgo.gff > rna_list.txt #extracts into new txt file\
+  grep -v ID=rna-trn* rna_list.txt > Rrna_list.txt #removes obsolete lines\
+  sed 's/;/<Control+V><TAB character>/g' Rrna_list > comma_rem.txt #convert ; into tabs\
+  awk '\{ print $1\}' comma_rem.txt > transcript_name.txt\
+    sed 's/ID=rna-*//' transcript_name.txt > Tname.txt\
+  awk '\{ print $2\}' comma_rem.txt > gene_name.txt\
+    sed 's/Parent=gene-*//' gene_name.txt > Gname.txt\
+tx2gene <- data.frame(Tname$X1, Gname$X1)\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 files <- file.path("RNA_quant_files", sample_names$X1, "quant.sf") #double check location and naming\
+names(files) <- paste0("sample", 1:__) #this is my sample number, inclusive\
+all(file.exists(files))\
+txi.salmon <- tximport(files, type = "salmon", tx2gene = tx2gene)\
+head(txi.salmon$counts)\
+#write.csv(txi.salmon$counts, file = 'txi_fit.csv')\
+#This .csv will be the count matrix [gene counts x sample]\
+#supplemental (ctm_male.csv)\
+\
+#6. Differential Expression Analysis using DEseq2\
+#Follow the steps detailed by Love et al here: https://bioconductor.org/packages/release/bioc/html/DESeq2.html\
+#Quick note, we will generate a meta file that gives parameters to deseq2 regarding control/experimental groups:\
+#make a new meta .csv for each differential comparison we make - \'91_meta.csv\'92\
+#[Sample,Treatment]\
+#[sample#,Control/Test]\
+library(readr)\
+#Call meta.csv file with exp design\
+col <- read.csv("/Users/maxbutensky/Desktop/CougarCourses/FASTAfiles/sal_output/Count_files/Meta/FO_female/FOfg_meta.csv", header = TRUE)\
+#View(col)\
+#Next we will reformat the meta file\
+row.names(col) <- col$Sample \
+col$Sample <- as.factor(col$Sample)\
+col$Treatment <- as.factor(col$Treatment)\
+#Below we will test similarities across datasets\
+all(rownames(col) %in% colnames(ctm_male)) #T\
+all(rownames(col) == colnames(ctm_male)) #meant to be false\
+all(row.names(col) == colnames(ctm_male))\
+#DESeq dataset formation\
+library("DESeq2")\
+dds_max <- DESeqDataSetFromMatrix(countData = round(ctm_male),\
+                                   colData = col,\
+                                   design = ~ Treatment)\
+dds_ctm\
+#we have just connected out count matrix and meta file with design parameters\
+deg_found <- DESeq(dds_ctm)\
+contrast <- c("Treatment", \'93Test\'94, \'93Control")\
+results <- results(deg_found, contrast=contrast)\
+write.csv(results, file = "DEG_x1.csv") #this will produce a file with outputs [baseMean, log2FoldChange, lfcSE, stat, p-value, padj.]\
+\
+#7. Filtering expression into patterns along migration\
+#From deseq2 output, we will need to collate sequential transition such that ocean -> river output for a gene is aligned with river -> spawn output (combinedDEG.csv)\
+comb <- combinedDEG.csv\
+#ex [gene x : migratory transition 1 : migratory transition 2]\
+#Using a 3 stage migration yield 2 differential analyses (ocean -> river, river -> spawn) , with 3 potential outcome for each gene (up, dwn, no change) we will generate 9 total pattern for expression.\
+# UpUp , UpFlat , UpDn\
+# FlatUp , FlatFlat , FlatDn\
+# DnUp , DnFlat , DnDn	\
+#With this we will filter out compiled differential analysis\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 #First we will extract expression by a single transition\
+library("dplyr")\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 FOupMuscle <- filter(comb, comb$muscle_l2fc_FO>0 & comb$muscle_padj_FO<0.05) #FO depicts transition from ocean to river\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 OPupMuscle <- filter(comb, comb$muscle_l2fc_OP>0 & comb$muscle_padj_OP<0.05) #OP depicts transition from river to spawn\
+#now as a group of 3 sequences\
+mmUPUP <- filter(comb, comb$muscle_l2fc_FO>0 & comb$muscle_padj_FO<0.05 & comb$muscle_l2fc_OP>0 & comb$muscle_padj_OP<0.05)\
+mmUPFL <- filter(comb, comb$muscle_l2fc_FO>0 & comb$muscle_padj_FO<0.05 & comb$muscle_padj_OP>0.05)\
+mmUPDN <- filter(comb, comb$muscle_l2fc_FO>0 & comb$muscle_padj_FO<0.05 & comb$muscle_l2fc_OP<0 & comb$muscle_padj_OP<0.05)\
+#iterations of this should be remade for each tissue expression we extract\
+#Next, in preparation for GOanalysis, we will need to make a new file that distinguished genes that fit a pattern from background sound\
+mmUPUP_pat <- comb$Gene %in% mmUPUP$Gene #this will give a True/False statement if background gene is in target gene list\
+comb_mmUPUP <- cbind(comb,mmUPUP_pat) #this will add a new column to comb that is the true/false statement for each gene\
+comb_mmUPUP$mmUPUP_pat <- as.integer(comb_mmUPUP$mmUPUP_pat) #converts True = 1 , False = 0\
+mmUPUP_div <- comb_mmUPUP[,c(1,6)] #this extracts just the binary column - genes are in group or not in group\
+write.csv(mmUPUP_div, file = "mmUPUP_div.csv", row.names = FALSE) #save locally, as this will be used in GOmwu function\
+#supplemental [maleGene_\'92tissue\'92-pattern.csv] present the genes that fall into each expression pattern, compiled together.\
+\
+#8. Gene Ontology Enrichment - we used GOmwu (https://github.com/z0on/GO_MWU)\
+#Required files: GO_MWU.R, gomwu_a.pl , gomwu_b.pl , gomwu.function.R , GO hierarchy file (go.obo, see detail on GitHub to acquire this), GO annotation (gene : GO-terms), binary measurement (pattern or no pattern)\
+#Make a tab-delimited file GO annotation file [gene : GO-terms] \
+#using eggNOG functional genome mapper, find all related GO terms associated with each gene (http://eggnog-mapper.embl.de/, https://academic.oup.com/mbe/article/38/12/5825/6379734)\
+#Try out inputs on their web browser : I used .gtf.gz ncbi file as proteins, and selected \'91Protein\'92, or even FASTA files\
+#However, one of the input files here needs to be the transcriptome generated by isolating the RNA from the genbank genome file (also, sorting of the high genome data frame will require linux functions):\
+GCFOgo.gff #renamed downloaded .gff from ncbi)\
+#Now, in a NEW single folder, need the following provided docs (4): GO_MWU.R, gomwu_a.pl, gomwu_b.pl, gomwu.functions.R\
+#in same folder, include generated files for ogo:\
+#   1. go.obo,\
+#   2. GOassoc (gene id - GO terms): tab-delimited,\
+#   3. quantification (gene id - l2fc/binary), aka inputs\
+input="mmUPUP_div.csv"\
+goAnnotations="GO_assoc.txt"\
+goDatabase="go.obo"\
+goDivision="CC" # either MF, or BP, or CC\
+source("gomwu.functions.R")\
+\
+gomwuStats(input, goDatabase, goAnnotations, goDivision,\
+           perlPath="perl",\
+           largest=0.1,  \
+           smallest=5,   \
+           clusterCutHeight=0.25,\
+)\
+#Choose: Molecular Function, Cellular Component, Biological Process\
+#Parameters above were used for study\
+#Note: BP requires greater computation, so I ran it on the Kamiak Cluster submitting .sh scripts with instructions to run analyses\
+#Below are details on batch submission:\
+#!/bin/bash\
+#SBATCH --partition=cahnrs\
+#SBATCH --account=phelps\
+#SBATCH --job-name=Max_patternsXGO\
+#SBATCH --output=%x_%j.out\
+#SBATCH --error=%x_%j.err\
+#SBATCH --mail-type=ALL\
+#SBATCH --mail-user=max.butensky@wsu.edu\
+#SBATCH --time=20:00:00\
+#SBATCH --nodes=1\
+#SBATCH --ntasks=1\
+#SBATCH --ntasks-per-node=1\
+#SBATCH --cpus-per-task=1\
+#SBATCH --mem=124GB\
+\
+module load r\
+Rscript upFOmm_div.R\
+#Whereby _.R script is the above 6 functions in the script\
+#Supplemental (male_GOxPattern)\
+\
+#9. Shared Expression analysis of Group M genes\
+#Next, I extracted the list of genes that fit the pattern and fall into \'91Immune Effector Process\'92\
+#This was done by querying the BP_.csv (output file from GOenrichment) for the same term\
+#New data frames were generated using these lists - of all the genes that enrich IEP that share expression profiles from each tissue\
+#From here, I used the \'91intersect()\'92 function to find similar genes across tissues, narrowing down to 31 found across all tissues sampled\
+#supplemental: IEP_shared.csv\
+}
